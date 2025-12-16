@@ -216,6 +216,8 @@ router.put(
 // Delete song
 router.delete('/:id', authMiddleware, async (req: AuthRequest, res) => {
   try {
+    // eslint-disable-next-line no-console
+    console.log('DELETE /songs/:id called with id:', req.params.id);
     const { id } = req.params;
 
     const song = await Song.findById(id);
