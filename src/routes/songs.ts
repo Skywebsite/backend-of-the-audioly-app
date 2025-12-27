@@ -213,6 +213,26 @@ router.put(
   }
 );
 
+// Increment play count (public endpoint, no auth required)
+router.post('/:id/play', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const song = await Song.findByIdAndUpdate(
+      id,
+      { $inc: { playCount: 1 } },
+      { new: true }
+    );
+    if (!song) {
+      return res.status(404).json({ message: 'Song not found' });
+    }
+    return res.json({ playCount: song.playCount });
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error(e);
+    return res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
 // Delete song
 router.delete('/:id', authMiddleware, async (req: AuthRequest, res) => {
   try {

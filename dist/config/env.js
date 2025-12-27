@@ -7,7 +7,7 @@ exports.env = void 0;
 const dotenv_1 = __importDefault(require("dotenv"));
 dotenv_1.default.config();
 exports.env = {
-    port: process.env.PORT || 4000,
+    port: parseInt(process.env.PORT || '4000', 10),
     mongoUri: process.env.MONGO_URI || '',
     jwtSecret: process.env.JWT_SECRET || '',
     jwtExpiresIn: process.env.JWT_EXPIRES_IN || '15m',

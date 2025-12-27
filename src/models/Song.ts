@@ -9,6 +9,7 @@ export interface ISong extends Document {
   coverUrl?: string;
   coverPublicId?: string;
   isPublic: boolean;
+  playCount: number;
 }
 
 const songSchema = new Schema<ISong>(
@@ -21,6 +22,7 @@ const songSchema = new Schema<ISong>(
     coverUrl: { type: String },
     coverPublicId: { type: String },
     isPublic: { type: Boolean, default: true },
+    playCount: { type: Number, default: 0 },
   },
   { timestamps: true }
 );

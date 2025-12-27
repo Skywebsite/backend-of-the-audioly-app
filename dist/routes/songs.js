@@ -84,4 +84,105 @@ router.get('/mine', auth_1.authMiddleware, async (req, res) => {
     const songs = await Song_1.Song.find({ owner: req.userId }).sort({ createdAt: -1 });
     return res.json(songs);
 });
+// Update song (title, category, isPublic, cover)
+router.put('/:id', auth_1.authMiddleware, upload.fields([{ name: 'cover', maxCount: 1 }]), async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { title, category, isPublic } = req.body;
+        const song = await Song_1.Song.findById(id);
+        if (!song) {
+            return res.status(404).json({ message: 'Song not found' });
+        }
+        // Check if user owns this song
+        if (song.owner.toString() !== req.userId) {
+            return res.status(403).json({ message: 'Not authorized' });
+        }
+        const files = req.files;
+        const coverFile = files?.cover?.[0];
+        let coverUrl = song.coverUrl;
+        let coverPublicId = song.coverPublicId;
+        // If new cover is uploaded, replace old one
+        if (coverFile) {
+            const uploadToCloudinary = async (file, folder, resourceType) => new Promise((resolve, reject) => {
+                const stream = cloudinary_1.default.uploader.upload_stream({
+                    folder,
+                    resource_type: resourceType,
+                }, (error, result) => {
+                    if (error || !result)
+                        return reject(error);
+                    resolve({ url: result.secure_url, public_id: result.public_id });
+                });
+                stream.end(file.buffer);
+            });
+            // Delete old cover from Cloudinary if exists
+            if (song.coverPublicId) {
+                try {
+                    await cloudinary_1.default.uploader.destroy(song.coverPublicId);
+                }
+                catch {
+                    // ignore deletion errors
+                }
+            }
+            const coverUpload = await uploadToCloudinary(coverFile, 'audioly/covers', 'image');
+            coverUrl = coverUpload.url;
+            coverPublicId = coverUpload.public_id;
+        }
+        // Update song
+        const updateData = {};
+        if (title !== undefined)
+            updateData.title = title;
+        if (category !== undefined)
+            updateData.category = category;
+        if (isPublic !== undefined) {
+            updateData.isPublic = typeof isPublic === 'string' ? isPublic === 'true' : isPublic;
+        }
+        updateData.coverUrl = coverUrl;
+        updateData.coverPublicId = coverPublicId;
+        const updatedSong = await Song_1.Song.findByIdAndUpdate(id, updateData, { new: true });
+        return res.json(updatedSong);
+    }
+    catch (e) {
+        // eslint-disable-next-line no-console
+        console.error(e);
+        return res.status(500).json({ message: 'Internal server error' });
+    }
+});
+// Delete song
+router.delete('/:id', auth_1.authMiddleware, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const song = await Song_1.Song.findById(id);
+        if (!song) {
+            return res.status(404).json({ message: 'Song not found' });
+        }
+        // Check if user owns this song
+        if (song.owner.toString() !== req.userId) {
+            return res.status(403).json({ message: 'Not authorized' });
+        }
+        // Delete files from Cloudinary
+        try {
+            if (song.audioPublicId) {
+                await cloudinary_1.default.uploader.destroy(song.audioPublicId, { resource_type: 'video' });
+            }
+            if (song.coverPublicId) {
+                await cloudinary_1.default.uploader.destroy(song.coverPublicId);
+            }
+        }
+        catch {
+            // ignore deletion errors
+        }
+        // Remove from user's uploadedSongs
+        await User_1.User.findByIdAndUpdate(req.userId, {
+            $pull: { uploadedSongs: id },
+        });
+        // Delete song from database
+        await Song_1.Song.findByIdAndDelete(id);
+        return res.json({ message: 'Song deleted successfully' });
+    }
+    catch (e) {
+        // eslint-disable-next-line no-console
+        console.error(e);
+        return res.status(500).json({ message: 'Internal server error' });
+    }
+});
 exports.default = router;

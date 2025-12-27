@@ -18,15 +18,22 @@ router.get('/me', auth_1.authMiddleware, async (req, res) => {
         return res.status(404).json({ message: 'User not found' });
     return res.json(user);
 });
-// Update basic settings (currently only isPrivate)
+// Update basic settings (name / username / privacy)
 router.patch('/me', auth_1.authMiddleware, async (req, res) => {
-    const { isPrivate, name } = req.body;
-    const user = await User_1.User.findByIdAndUpdate(req.userId, {
-        $set: {
-            ...(typeof isPrivate === 'boolean' ? { isPrivate } : {}),
-            ...(name ? { name } : {}),
-        },
-    }, { new: true }).select('-password');
+    const { isPrivate, name, username } = req.body;
+    const updates = {
+        ...(typeof isPrivate === 'boolean' ? { isPrivate } : {}),
+        ...(name ? { name } : {}),
+    };
+    if (username) {
+        const normalized = username.trim().toLowerCase();
+        const existing = await User_1.User.findOne({ _id: { $ne: req.userId }, username: normalized });
+        if (existing) {
+            return res.status(409).json({ message: 'Username already taken' });
+        }
+        updates.username = normalized;
+    }
+    const user = await User_1.User.findByIdAndUpdate(req.userId, { $set: updates }, { new: true }).select('-password');
     if (!user)
         return res.status(404).json({ message: 'User not found' });
     return res.json(user);
@@ -76,7 +83,7 @@ router.get('/', auth_1.authMiddleware, async (req, res) => {
         return res.status(404).json({ message: 'User not found' });
     const friends = new Set(me.friends.map((id) => id.toString()));
     const requests = new Set(me.friendRequests.map((id) => id.toString()));
-    const users = await User_1.User.find({ _id: { $ne: me.id } }).select('name email isPrivate friends friendRequests');
+    const users = await User_1.User.find({ _id: { $ne: me.id } }).select('name username profileImage isPrivate friends friendRequests');
     const result = users.map((u) => {
         const id = u.id;
         const isFriend = friends.has(id);
@@ -85,7 +92,8 @@ router.get('/', auth_1.authMiddleware, async (req, res) => {
         return {
             id,
             name: u.name,
-            email: u.email,
+            username: u.username,
+            profileImage: u.profileImage,
             isPrivate: u.isPrivate,
             isFriend,
             sentRequest,
@@ -97,8 +105,8 @@ router.get('/', auth_1.authMiddleware, async (req, res) => {
 // Get my friends and pending requests
 router.get('/friends', auth_1.authMiddleware, async (req, res) => {
     const me = await User_1.User.findById(req.userId)
-        .populate('friends', 'name email isPrivate')
-        .populate('friendRequests', 'name email isPrivate');
+        .populate('friends', 'name username email isPrivate profileImage')
+        .populate('friendRequests', 'name username email isPrivate profileImage');
     if (!me)
         return res.status(404).json({ message: 'User not found' });
     return res.json({
@@ -176,7 +184,7 @@ router.get('/:userId/profile', auth_1.authMiddleware, async (req, res) => {
     return res.json({
         id: target.id,
         name: target.name,
-        email: target.email,
+        username: target.username,
         isPrivate: target.isPrivate,
         profileImage: target.profileImage,
         friendsCount,
