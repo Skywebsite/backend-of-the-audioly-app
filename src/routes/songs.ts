@@ -8,6 +8,13 @@ import cloudinary from '../config/cloudinary';
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage() });
 
+const deriveTitleFromFilename = (filename: string | undefined) => {
+  const raw = (filename ?? '').trim();
+  const withoutExt = raw.replace(/\.[^/.]+$/, '');
+  const cleaned = withoutExt.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return cleaned || 'Untitled';
+};
+
 // Upload audio (and optional cover) to Cloudinary and create Song
 router.post(
   '/upload',
@@ -24,10 +31,6 @@ router.post(
         isPublic?: string;
       };
 
-      if (!title) {
-        return res.status(400).json({ message: 'Title is required' });
-      }
-
       const files = req.files as {
         [fieldname: string]: Express.Multer.File[];
       };
@@ -36,6 +39,8 @@ router.post(
       if (!audioFile) {
         return res.status(400).json({ message: 'Audio file is required' });
       }
+
+      const resolvedTitle = title?.trim() ? title.trim() : deriveTitleFromFilename(audioFile.originalname);
 
       const coverFile = files?.cover?.[0];
 
@@ -71,7 +76,7 @@ router.post(
 
       const song = await Song.create({
         owner: req.userId,
-        title,
+        title: resolvedTitle,
         category,
         audioUrl: audioUpload.url,
         audioPublicId: audioUpload.public_id,

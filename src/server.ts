@@ -5,6 +5,10 @@ import morgan from 'morgan';
 
 import { connectDb } from './config/db';
 import { env } from './config/env';
+import authRoutes from './routes/auth';
+import userRoutes from './routes/users';
+import songRoutes from './routes/songs';
+import resolverRoutes from './routes/resolver';
 
 async function bootstrap() {
   try {
@@ -16,6 +20,9 @@ async function bootstrap() {
     console.error('Failed to connect to MongoDB', err);
     process.exit(1);
   }
+
+  // eslint-disable-next-line no-console
+  console.log('--- SERVER STARTUP CHECK ---');
 
   const app = express();
 
@@ -29,12 +36,10 @@ async function bootstrap() {
   });
 
   // API routes
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  app.use('/auth', require('./routes/auth').default);
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  app.use('/users', require('./routes/users').default);
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  app.use('/songs', require('./routes/songs').default);
+  app.use('/auth', authRoutes);
+  app.use('/users', userRoutes);
+  app.use('/songs', songRoutes);
+  app.use('/', resolverRoutes);
 
   app.listen(env.port, '0.0.0.0', () => {
     // eslint-disable-next-line no-console

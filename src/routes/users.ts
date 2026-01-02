@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import multer from 'multer';
 import { AuthRequest, authMiddleware } from '../middleware/auth';
+import { optionalAuthMiddleware } from '../middleware/optionalAuth';
 import { User } from '../models/User';
 import { Song } from '../models/Song';
 import cloudinary from '../config/cloudinary';
@@ -97,23 +98,47 @@ router.patch(
   }
 );
 
-// List all users with simple status relative to current user
-router.get('/', authMiddleware, async (req: AuthRequest, res) => {
-  const me = await User.findById(req.userId);
-  if (!me) return res.status(404).json({ message: 'User not found' });
+// List all users with optional search and simple status
+router.get('/', optionalAuthMiddleware, async (req: AuthRequest, res) => {
+  const { q } = req.query;
+  let me: InstanceType<typeof User> | null = null;
 
-  const friends = new Set(me.friends.map((id) => id.toString()));
-  const requests = new Set(me.friendRequests.map((id) => id.toString()));
+  if (req.userId) {
+    me = await User.findById(req.userId);
+  }
 
-  const users = await User.find({ _id: { $ne: me.id } }).select(
-    'name username profileImage isPrivate friends friendRequests'
-  );
+  // Build filter
+  const filter: any = {};
+  if (me) {
+    filter._id = { $ne: me.id };
+  }
 
-  const result = users.map((u) => {
+  if (typeof q === 'string' && q.trim()) {
+    const regex = new RegExp(q.trim(), 'i');
+    filter.$or = [
+      { name: regex },
+      { username: regex }
+    ];
+  }
+
+  const friends = new Set(me?.friends.map((id) => id.toString()) || []);
+  const requests = new Set(me?.friendRequests.map((id) => id.toString()) || []);
+
+  const users = await User.find(filter)
+    .select('name username profileImage isPrivate friends friendRequests')
+    .sort({ createdAt: -1 }) // Newest users first or relevant sort
+    .limit(50); // Limit results for performance
+
+  const result = await Promise.all(users.map(async (u) => {
     const id = u.id;
     const isFriend = friends.has(id);
-    const sentRequest = u.friendRequests.some((rid) => rid.toString() === me.id);
+    const sentRequest = me ? u.friendRequests.some((rid) => rid.toString() === me!.id) : false;
     const incomingRequest = requests.has(id);
+
+    // Get song count (public only for non-friends/strangers usually, but request said 'uploaded')
+    // Let's count public songs for consistency with what they can perform searching on
+    const songsCount = await Song.countDocuments({ owner: id, isPublic: true });
+
     return {
       id,
       name: u.name,
@@ -123,8 +148,9 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
       isFriend,
       sentRequest,
       incomingRequest,
+      songsCount
     };
-  });
+  }));
 
   return res.json(result);
 });
@@ -196,15 +222,15 @@ router.post('/request/:userId/accept', authMiddleware, async (req: AuthRequest, 
 });
 
 // Public profile for a given user, with privacy rules
-router.get('/:userId/profile', authMiddleware, async (req: AuthRequest, res) => {
+router.get('/:userId/profile', optionalAuthMiddleware, async (req: AuthRequest, res) => {
   const { userId } = req.params;
-  const viewerId = String(req.userId);
+  const viewerId = req.userId ? String(req.userId) : null;
 
   const target = await User.findById(userId);
   if (!target) return res.status(404).json({ message: 'User not found' });
 
   const isSelf = viewerId === String(target.id);
-  const isFriend = target.friends.some((id) => id.toString() === viewerId);
+  const isFriend = viewerId ? target.friends.some((id) => id.toString() === viewerId) : false;
 
   const friendsCount = target.friends.length;
 
@@ -217,10 +243,49 @@ router.get('/:userId/profile', authMiddleware, async (req: AuthRequest, res) => 
   if (!canSeeUploads) {
     uploads = [];
   } else if (isSelf || isFriend) {
-    uploads = await Song.find({ owner: target.id }).sort({ createdAt: -1 });
+    // Friends and self can see all songs (maybe? or just public + private? usually friends see everything or just public?)
+    // Requirement "songs the have uploded". Usually private songs are for self only.
+    // Let's assume friends can see public only, and self sees all.
+    // Or actually, let's follow standard social: public is for everyone, private is for approved friends?
+    // If "isPrivate" account usually implies content is private.
+    // Let's return all songs if isSelf, otherwise only public songs.
+    // UNLESS account is private, then friends can see 'public' marked songs?
+    // Let's match the logic:
+    if (isSelf) {
+      uploads = await Song.find({ owner: target.id }).sort({ createdAt: -1 });
+    } else {
+      // If I am a friend, or it's a public account, I can see PUBLIC songs.
+      // Private songs are usually strictly private or for specific sharing.
+      // Let's assume standard "public" visibility for songs.
+      uploads = await Song.find({ owner: target.id, isPublic: true }).sort({ createdAt: -1 });
+    }
   } else {
-    // public viewer, only public songs
+    // public viewer (not friend, not self)
+    // If account is private, they see nothing (handled by canSeeUploads=false above).
+    // If account is public, they see public songs.
     uploads = await Song.find({ owner: target.id, isPublic: true }).sort({ createdAt: -1 });
+  }
+
+  // Get request status if logged in
+  let connectionStatus: 'none' | 'friend' | 'sent' | 'received' | 'self' = 'none';
+  if (isSelf) {
+    connectionStatus = 'self';
+  } else if (isFriend) {
+    connectionStatus = 'friend';
+  } else if (viewerId) {
+    // Check requests
+    if (target.friendRequests.some(id => id.toString() === viewerId)) {
+      connectionStatus = 'sent';
+    } else {
+      // Check if they requested me (I need to check MY requests, but I don't have 'me' loaded efficiently here)
+      // optimization: we can do a quick count/find on User or check if target is in MY requests.
+      // Easier: just check target's friends/requests? No, incoming is in MY document.
+      // Let's load 'me' if needed or do a count.
+      const me = await User.findById(viewerId).select('friendRequests');
+      if (me && me.friendRequests.some(id => id.toString() === target.id)) {
+        connectionStatus = 'received';
+      }
+    }
   }
 
   return res.json({
@@ -231,8 +296,7 @@ router.get('/:userId/profile', authMiddleware, async (req: AuthRequest, res) => 
     profileImage: target.profileImage,
     friendsCount,
     uploadsCount: uploads.length,
-    isSelf,
-    isFriend,
+    connectionStatus, // Send this simplified status to frontend
     canSeeUploads,
     uploads,
   });
